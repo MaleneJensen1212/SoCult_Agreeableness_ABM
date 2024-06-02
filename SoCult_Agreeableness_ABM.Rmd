@@ -1,0 +1,1130 @@
+---
+title: "SoCult_Agreeableness_ABM"
+author: "Ane & Malene"
+date: "2024-04-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("tidygraph", type = "source")
+
+library(tidygraph)
+library(dplyr)
+library(ggplot2)
+
+set.seed(221) 
+```
+
+
+```{r}
+#when referring to remedies in the code, were are refering to the same as ingredients in the paper
+
+value_remedy <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62, 87, 117, 152, 192) 
+
+# Level thresholds
+levels <- c(75, 97.5, 140, 215, 327.5, 477.5, 665, 890)
+
+# Number of agents and time points
+population <- 50
+nTime <- 100
+nNeighbour <- 3  # Number of neighbours each agent compares with
+
+# Initialize data frames and vectors
+df_fully_mixed <- data.frame()
+df_fully_high <- data.frame()
+df_fully_low <- data.frame()
+df_part_mix <- data.frame()
+df_part_high <- data.frame() 
+df_part_low <- data.frame()
+
+
+#agent characteristics
+#agreeableness
+fixed_mixed_agree_values <- runif(population, 0, 1) 
+fixed_high_agree_values <- runif(population, 0.7, 1)
+fixed_low_agree_values <- runif(population, 0, 0.3)
+
+#pushiness, 1- agreeableness
+fixed_mixed_pushiness_values <- 1 - fixed_mixed_agree_values
+fixed_low_pushiness_values <- 1 - fixed_high_agree_values
+fixed_high_pushiness_values <- 1 - fixed_low_agree_values
+
+
+# Initialize variables
+max_scores <- rep(0, population)
+best_remedies <- matrix(0, ncol = 3, nrow = population)
+
+
+#networks
+# Fully connected network
+fully_connected <- matrix(1, population, population)
+diag(fully_connected) <- 0
+
+list_agents <- seq(1, population)
+
+#partially connected network
+partially_connected <- matrix(0, population, population)
+for (i in 1:population) {
+  neighbours <- sample(list_agents[-i], size = nNeighbour, replace = FALSE)
+  partially_connected[i, neighbours] <- 1
+}
+
+# Function to sample remedies based on the score
+sample_remedy <- function(score) {
+  level_index <- findInterval(score, levels) + 1 #returns index of the level in which score falls, eg score 80 is between 75 and 97,5 ->                                                    level 2 (score 75), + 1 because level 1 is 0 - 75
+  sample(value_remedy[1:(6 + level_index - 1)], 1) # - 1 because if on level 3 you can choose 8 remedies, 6 + 3 = 9 = wrong
+}
+
+```
+
+```{r}
+#fully connected network
+#mixed agreeability
+
+all_runs_fully_mixed <- list() # initialize list for each run
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_fully_mixed <- data.frame()  # Clear previous run data
+
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_fully_mixed <- data.frame()
+    #previous_time_data <- all_data_fully_mixed[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      #calculate the score for the sampled remedies, based on the paper
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_mixed_agree_values[i],
+        Pushiness = fixed_mixed_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Fully_mixed",
+        Network = "Fully_connected",
+        Group = "Mixed"
+      )
+      
+      current_time_data_fully_mixed <- rbind(current_time_data_fully_mixed, Agent)
+    }
+    
+    df_fully_mixed <- rbind(df_fully_mixed, current_time_data_fully_mixed)
+    
+    # Comparison of scores every 10 trials
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = fully_connected[agent,])
+        #initializing variables
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          #finding max score of neighbour and agent 
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_mixed_pushiness_values[neighbour]
+          agent_push_score <- fixed_mixed_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_mixed_agree_values[agent])
+          
+          #when remedies are adopted, place them in the data frame
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_fully_mixed[current_time_data_fully_mixed$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+          
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_mixed_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_mixed_pushiness_values[most_pushy_neighbour])
+            
+            #when remedies are pushed, place them in the data frame
+            if (push_yn == 1) { 
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_fully_mixed[current_time_data_fully_mixed$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      #update the best remedies and max scores
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+    
+          }
+        }
+      }
+    }
+    # Store each run's data frame in a list
+    all_runs_fully_mixed[[paste0("Run_", simulation_run)]] <- df_fully_mixed
+}
+```
+
+
+```{r}
+#fully connected
+#high agreeability
+
+all_runs_fully_high <- list()
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_fully_high <- data.frame()  # Clear previous run data
+  
+  
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_fully_high <- data.frame()
+    #previous_time_data <- all_data[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      # Calculate the new score
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_high_agree_values[i],
+        Pushiness = fixed_low_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Fully_high",
+        Network = "Fully_connected",
+        Group = "High"
+        
+      )
+      
+      current_time_data_fully_high <- rbind(current_time_data_fully_high, Agent)
+    }
+    
+    df_fully_high <- rbind(df_fully_high, current_time_data_fully_high)
+    
+    # Comparison of scores every 10 iterations
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = fully_connected[agent,])
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_low_pushiness_values[neighbour]
+          agent_push_score <- fixed_low_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_high_agree_values[agent])
+          
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_fully_high[current_time_data_fully_high$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+          
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_low_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_low_pushiness_values[most_pushy_neighbour])
+            
+            if (push_yn == 1) {
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_fully_high[current_time_data_fully_high$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+  
+          }
+        }
+      }
+  }
+    # Store each run's data frame in a list
+    all_runs_fully_high[[paste0("Run_", simulation_run)]] <- df_fully_high
+}
+```
+
+
+
+```{r}
+#fully connected
+#low agreeability
+
+all_runs_fully_low <- list()
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_fully_low <- data.frame()  # Clear previous run data
+
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_fully_low <- data.frame()
+    #previous_time_data <- all_data[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      # Calculate the new score
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_low_agree_values[i],
+        Pushiness = fixed_high_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Fully_low",
+        Network = "Fully_connected",
+        Group = "Low"
+      )
+      
+      current_time_data_fully_low <- rbind(current_time_data_fully_low, Agent)
+    }
+    
+    df_fully_low <- rbind(df_fully_low, current_time_data_fully_low)
+    
+    # Comparison of scores every 10 iterations
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = fully_connected[agent,])
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_high_pushiness_values[neighbour]
+          agent_push_score <- fixed_high_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_low_agree_values[agent])
+          
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_fully_low[current_time_data_fully_low$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+          
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_high_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_high_pushiness_values[most_pushy_neighbour])
+            
+            if (push_yn == 1) {
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_fully_low[current_time_data_fully_low$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+  
+        }
+      }
+    }
+  }
+        # Store each run's data frame in a list
+    all_runs_fully_low[[paste0("Run_", simulation_run)]] <- df_fully_low
+}
+```
+
+
+```{r}
+#partially connected network
+#mixed agreeability
+
+all_runs_part_mix <- list()
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_part_mix <- data.frame()  # Clear previous run data
+
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_part_mix <- data.frame()
+    #previous_time_data <- all_data[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      # Calculate the new score
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_mixed_agree_values[i],
+        Pushiness = fixed_mixed_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Part_mixed",
+        Network = "Part_connected",
+        Group = "Mixed"
+      )
+      
+      current_time_data_part_mix <- rbind(current_time_data_part_mix, Agent)
+    }
+    
+    df_part_mix <- rbind(df_part_mix, current_time_data_part_mix)
+    
+    # Comparison of scores every 10 iterations
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = partially_connected[agent,])
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_mixed_pushiness_values[neighbour]
+          agent_push_score <- fixed_mixed_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_mixed_agree_values[agent])
+          
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_part_mix[current_time_data_part_mix$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+        
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_mixed_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_mixed_pushiness_values[most_pushy_neighbour])
+            
+            if (push_yn == 1) {
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_part_mix[current_time_data_part_mix$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+  
+        }
+      }
+    }
+  }
+        # Store each run's data frame in a list
+    all_runs_part_mix[[paste0("Run_", simulation_run)]] <- df_part_mix
+}
+```
+
+
+```{r}
+#partially connected
+#high agreeability
+
+all_runs_part_high <- list()
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_part_high <- data.frame()  # Clear previous run data
+
+
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_part_high <- data.frame()
+    #previous_time_data <- all_data[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      # Calculate the new score
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_high_agree_values[i],
+        Pushiness = fixed_low_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Part_high",
+        Network = "Part_connected",
+        Group = "High"
+      )
+      
+      current_time_data_part_high <- rbind(current_time_data_part_high, Agent)
+    }
+    
+    df_part_high <- rbind(df_part_high, current_time_data_part_high)
+    
+    # Comparison of scores every 10 iterations
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = partially_connected[agent,])
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_low_pushiness_values[neighbour]
+          agent_push_score <- fixed_low_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_high_agree_values[agent])
+          
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_part_high[current_time_data_part_high$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+        
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_low_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_low_pushiness_values[most_pushy_neighbour])
+            
+            if (push_yn == 1) {
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_part_high[current_time_data_part_high$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+  
+        }
+      }
+    }
+  }
+    # Store each run's data frame in a list
+    all_runs_part_high[[paste0("Run_", simulation_run)]] <- df_part_high
+}
+```
+
+
+
+```{r}
+#partially connected
+#low agreeability
+
+
+
+all_runs_part_low <- list()
+
+
+for (simulation_run in 1:10) { #runs each simulation 10 times
+  # Reinitialize the variables when starting each run
+  max_scores <- rep(0, population)
+  best_remedies <- matrix(0, ncol = 3, nrow = population)
+  df_part_low <- data.frame()  # Clear previous run data 
+
+  # Simulation over time
+  for (k in 1:nTime) {
+    current_time_data_part_low <- data.frame()
+    #previous_time_data <- all_data[all_data$Time < k, ]  # All data up to previous time point
+  
+    for (i in 1:population) {
+      # Sample remedies based on the current best score
+      Remedy1 <- sample_remedy(max_scores[i])
+      Remedy2 <- sample_remedy(max_scores[i])
+      Remedy3 <- sample_remedy(max_scores[i])
+      
+      # Calculate the new score
+      Own_score <- (1 + length(unique(c(Remedy1, Remedy2, Remedy3))) * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+      
+      # Check if the new score is better
+      if (Own_score > max_scores[i]) {
+        max_scores[i] <- Own_score
+        best_remedies[i, ] <- c(Remedy1, Remedy2, Remedy3)
+      }
+      
+      # Create agent data frame
+      Agent <- data.frame(
+        Time = k,
+        AgentNo = i,
+        Agree = fixed_low_agree_values[i],
+        Pushiness = fixed_high_pushiness_values[i],
+        Remedy1 = best_remedies[i, 1],
+        Remedy2 = best_remedies[i, 2],
+        Remedy3 = best_remedies[i, 3],
+        SampledScore = Own_score,
+        BestSoFar = max_scores[i],
+        Condition = "Part_low",
+        Network = "Part_connected",
+        Group = "Low"
+      )
+      
+      current_time_data_part_low <- rbind(current_time_data_part_low, Agent)
+    }
+    
+    df_part_low <- rbind(df_part_low, current_time_data_part_low)
+    
+    # Comparison of scores every 10 iterations
+    if (k %% 10 == 0) {
+      adopted_remedy1 <- rep(NA, population)
+      adopted_remedy2 <- rep(NA, population)
+      adopted_remedy3 <- rep(NA, population)
+      
+      for (agent in list_agents) {
+        neighbours <- sample(list_agents, size = nNeighbour, replace = FALSE, prob = partially_connected[agent,])
+        best_neighbour_score <- 0
+        best_neighbour <- NA
+        most_pushy_neighbour_score <- 0
+        most_pushy_neighbour <- NA
+  
+        for (neighbour in neighbours) {
+          neighbour_score <- max_scores[neighbour]
+          agent_score <- max_scores[agent]
+          
+          # Finding neighbour with best score
+          if (!is.na(neighbour_score) && neighbour_score > best_neighbour_score) {
+            best_neighbour_score <- neighbour_score
+            best_neighbour <- neighbour
+          }
+          
+          # Finding the most pushy neighbour
+          pushy_neighbour_score <- fixed_high_pushiness_values[neighbour]
+          agent_push_score <- fixed_high_pushiness_values[agent]
+          
+          if (!is.na(pushy_neighbour_score) && pushy_neighbour_score > most_pushy_neighbour_score) {
+            most_pushy_neighbour_score <- pushy_neighbour_score
+            most_pushy_neighbour <- neighbour
+          }
+        }
+        
+        if (!is.na(best_neighbour) && best_neighbour_score > agent_score) {
+          adopt_yn <- rbinom(1, 1, fixed_low_agree_values[agent])
+          
+          if (adopt_yn == 1) {
+            adopted_remedy1[agent] <- best_remedies[best_neighbour, 1]
+            adopted_remedy2[agent] <- best_remedies[best_neighbour, 2]
+            adopted_remedy3[agent] <- best_remedies[best_neighbour, 3]
+            current_time_data_part_low[current_time_data_part_low$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+          }
+      
+        } else {
+          push_yn <- 0
+          
+          if (!is.na(most_pushy_neighbour) && most_pushy_neighbour_score > fixed_high_pushiness_values[agent]) { 
+            push_yn <- rbinom(1, 1, fixed_high_pushiness_values[most_pushy_neighbour])
+            
+            if (push_yn == 1) {
+              adopted_remedy1[agent] <- best_remedies[most_pushy_neighbour, 1]
+              adopted_remedy2[agent] <- best_remedies[most_pushy_neighbour, 2]
+              adopted_remedy3[agent] <- best_remedies[most_pushy_neighbour, 3]
+              current_time_data_part_low[current_time_data_part_low$AgentNo == agent, "Adopted"] <- 1  # Update 'Adopted' column to 1
+            }
+          }
+        }
+      }
+      
+      for (agent in list_agents) {
+        if (!is.na(adopted_remedy1[agent])) {
+          best_remedies[agent, ] <- c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent])
+          max_scores[agent] <- (1 + length(unique(c(adopted_remedy1[agent], adopted_remedy2[agent], adopted_remedy3[agent]))) * 0.5) * 
+                                (adopted_remedy1[agent] + adopted_remedy2[agent] + adopted_remedy3[agent])
+        } else {
+          max_scores[agent] <- (1 + length(unique(c(best_remedies[agent,]))) * 0.5) * 
+                                (best_remedies[agent, 1] + best_remedies[agent, 2] + best_remedies[agent, 3])
+  
+
+    
+        }
+      }
+    }
+  }
+        # Store each run's data frame in a list
+    all_runs_part_low[[paste0("Run_", simulation_run)]] <- df_part_low
+}
+
+
+
+```
+
+
+```{r}
+#install.packages("data.table")
+library(data.table)
+
+#create one list of all the data frames
+all_lists_combined <- c(all_runs_fully_low, all_runs_fully_mixed, all_runs_fully_high,
+                        all_runs_part_low, all_runs_part_mix, all_runs_part_high)
+
+all_runs <- rbindlist(all_lists_combined)
+
+#make df with only last runs
+last_time <- all_runs %>%
+  filter(Time == 100)
+
+
+```
+
+
+```{r}
+pacman::p_load('lme4')
+library(lme4)
+
+modeltest <- lm(BestSoFar ~ Agree + Network, data = last_time)
+summary(modeltest)
+
+```
+
+
+```{r}
+
+#tells us which condition does the better, we look at bestsofar because we want to see the difference in the final score
+ggplot(last_time, aes(x = Condition, y = BestSoFar, fill = Condition)) +
+  geom_boxplot() +
+  labs(title = "Boxplot of best final score by Condition",
+       x = "Condition",
+       y = "Score") +
+  theme_minimal()
+
+
+```
+
+```{r}
+# Aggregate data: calculate mean and standard error of scores for each group at each time point
+aggregated_data <- all_runs %>%
+  group_by(Time, Condition) %>%
+  summarise(
+    mean_score = mean(SampledScore),
+    se_score = sd(SampledScore) / sqrt(n()),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    lower_ci = mean_score - 1.96 * se_score,
+    upper_ci = mean_score + 1.96 * se_score
+  )
+
+# Plot aggregated scores over time with confidence intervals
+ggplot(aggregated_data, aes(x = Time, y = mean_score, color = Condition)) +
+  geom_line(size = 1.5, alpha = 0.7) +
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.2) +
+  labs(title = "Mean Agent Scores Over Time by Condition",
+       x = "Time",
+       y = "Mean Score",
+       color = "Group") +
+  theme_minimal() +
+  theme(legend.position = "right") + 
+  geom_hline(yintercept = 75, linetype = "dashed", color = "black", label = "level 2") +
+geom_hline(yintercept = 97,5, linetype = "dashed", color = "black", label = "level 3") + 
+  geom_hline(yintercept = 140, linetype = "dashed", color = "black") + 
+  geom_hline(yintercept = 215, linetype = "dashed", color = "black") + 
+  geom_hline(yintercept = 327.5, linetype = "dashed", color = "black")
+
+```
+
+
+
+```{r}
+
+library(tidygraph)
+#pacman::p_load(ggraph)
+library(ggraph)
+library(igraph)
+library(caret)
+
+#VISUALIZING THE NETOWKRS
+
+# Create a graph object from the adjacency matrix
+graph <- as_tbl_graph(fully_connected, directed = FALSE)
+graph2 <- as_tbl_graph(partially_connected, directed = FALSE)
+
+# Add node attributes (e.g., scores)
+graph <- graph %>%
+  activate(nodes) %>%
+  mutate(score = max_scores, name = 1:n())
+
+graph2 <- graph2 %>% 
+  activate(nodes) %>%
+  mutate(score = max_scores, name = 1:n())
+
+# Visualize the network
+graph_fully <- ggraph(graph, layout = "fr") +  # Using the Fruchterman-Reingold layout
+  geom_edge_link() +
+  geom_node_point(size = 5, color = "blue1", alpha = 0.7) +  # Size of nodes based on scores
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +  # Adding labels
+  theme_graph()  # A clean theme for graphs
+
+#plot part 
+graph_part <- ggraph(graph2, layout = "fr") +  # Using the Fruchterman-Reingold layout
+  geom_edge_link() +
+  geom_node_point(size = 5, color = "blue1", alpha = 0.7) +  # Size of nodes based on scores
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +  # Adding labels
+  theme_graph()  # A clean theme for graphs
+
+library(gridExtra)
+
+grid.arrange(graph_fully, graph_part, ncol = 2)
+
+```
+
+```{r}
+
+#pacman::p_load(plotly, reshape2)
+library(plotly)
+library(reshape2)
+
+# Define the fitness function
+fitness_function <- function(Remedy1, Remedy2, Remedy3) {
+  unique_count <- length(unique(c(Remedy1, Remedy2, Remedy3)))
+  fitness_value <- (1 + unique_count * 0.5) * (Remedy1 + Remedy2 + Remedy3)
+  return(fitness_value)
+}
+
+
+# Generate the solution space
+values1 <- c(2, 4, 6, 8, 10, 12)  # Example range for Remedy1, Remedy2, and Remedy3
+# Create a data frame to store the results
+results1 <- expand.grid(Remedy1 = values1, Remedy2 = values1, Remedy3 = values1)
+results1 <- results1[apply(results1, 1, function(x) all(x == sort(x))), ]
+# Calculate the fitness value for each combination
+results1$Fitness <- mapply(fitness_function, results1$Remedy1, results1$Remedy2, results1$Remedy3)
+#Reshape for plotting
+fitness_matrix1 <- acast(results1, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 2
+# Generate the solution space
+values2 <- c(2, 4, 6, 8, 10, 12, 17)  # Example range for Remedy1, Remedy2, and Remedy3
+# Create a data frame to store the results
+results2 <- expand.grid(Remedy1 = values2, Remedy2 = values2, Remedy3 = values2)
+results2 <- results2[apply(results2, 1, function(x) all(x == sort(x))), ]
+# Calculate the fitness value for each combination
+results2$Fitness <- mapply(fitness_function, results2$Remedy1, results2$Remedy2, results2$Remedy3)
+#Reshape for plotting
+fitness_matrix2 <- acast(results2, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 3
+# Generate the solution space
+values3 <- c(2, 4, 6, 8, 10, 12, 17, 27)  # Example range for Remedy1, Remedy2, and Remedy3
+# Create a data frame to store the results
+results3 <- expand.grid(Remedy1 = values3, Remedy2 = values3, Remedy3 = values3)
+results3 <- results3[apply(results3, 1, function(x) all(x == sort(x))), ]
+# Calculate the fitness value for each combination
+results3$Fitness <- mapply(fitness_function, results3$Remedy1, results3$Remedy2, results3$Remedy3)
+#Reshape for plotting
+fitness_matrix3 <- acast(results3, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 4
+values4 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42)
+results4 <- expand.grid(Remedy1 = values4, Remedy2 = values4, Remedy3 = values4)
+results4 <- results4[apply(results4, 1, function(x) all(x == sort(x))), ]
+results4$Fitness <- mapply(fitness_function, results4$Remedy1, results4$Remedy2, results4$Remedy3)
+fitness_matrix4 <- acast(results4, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 5
+values5 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62)
+results5 <- expand.grid(Remedy1 = values5, Remedy2 = values5, Remedy3 = values5)
+results5 <- results5[apply(results5, 1, function(x) all(x == sort(x))), ]
+results5$Fitness <- mapply(fitness_function, results5$Remedy1, results5$Remedy2, results5$Remedy3)
+fitness_matrix5 <- acast(results5, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 6
+values6 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62, 87)
+results6 <- expand.grid(Remedy1 = values6, Remedy2 = values6, Remedy3 = values6)
+results6 <- results6[apply(results6, 1, function(x) all(x == sort(x))), ]
+results6$Fitness <- mapply(fitness_function, results6$Remedy1, results6$Remedy2, results6$Remedy3)
+fitness_matrix6 <- acast(results6, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 7
+values7 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62, 87, 117)
+results7 <- expand.grid(Remedy1 = values7, Remedy2 = values7, Remedy3 = values7)
+results7 <- results7[apply(results7, 1, function(x) all(x == sort(x))), ]
+results7$Fitness <- mapply(fitness_function, results7$Remedy1, results7$Remedy2, results7$Remedy3)
+fitness_matrix7 <- acast(results7, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 8
+values8 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62, 87, 117, 152)
+results8 <- expand.grid(Remedy1 = values8, Remedy2 = values8, Remedy3 = values8)
+results8 <- results8[apply(results8, 1, function(x) all(x == sort(x))), ]
+results8$Fitness <- mapply(fitness_function, results8$Remedy1, results8$Remedy2, results8$Remedy3)
+fitness_matrix8 <- acast(results8, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+#same but for level 9
+values9 <- c(2, 4, 6, 8, 10, 12, 17, 27, 42, 62, 87, 117, 152, 192)
+results9 <- expand.grid(Remedy1 = values9, Remedy2 = values9, Remedy3 = values9)
+results9 <- results9[apply(results9, 1, function(x) all(x == sort(x))), ]
+results9$Fitness <- mapply(fitness_function, results9$Remedy1, results9$Remedy2, results9$Remedy3)
+fitness_matrix9 <- acast(results9, Remedy1 ~ Remedy2, value.var = "Fitness")
+
+
+```
+
+```{r}
+
+pacman::p_load(gridExtra)
+
+#plotting all 9 density dist in the same plot
+
+# Add a dataset identifier column to each dataframe
+results1$dataset <- 'Level 1'
+results2$dataset <- 'Level 2'
+results3$dataset <- 'Level 3'
+results4$dataset <- 'Level 4'
+results5$dataset <- 'Level 5'
+results6$dataset <- 'Level 6'
+results7$dataset <- 'Level 7'
+results8$dataset <- 'Level 8'
+results9$dataset <- 'Level 9'
+
+# Combine all dataframes into one
+all_results <- rbind(results1, results2, results3, results4, results5, results6, results7, results8, results9)
+
+
+combined_plot <- ggplot(all_results, aes(Fitness, group = dataset))+
+  geom_density(aes(color = dataset)) +
+  geom_vline(xintercept = c(75, 97.5, 140, 215, 327.5, 477.5, 665, 890, 1152.5), linetype = "dashed") +
+  labs(title = "Distribution of possible scores for each level", x = "Score", y = "Density")
+
+combined_plot
+
+```
